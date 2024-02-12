@@ -1,0 +1,4 @@
+config:
+  tokens:
+    api_key: "<insert api key>"
+    api_private_key: "<insert private api key>"
