@@ -24,7 +24,7 @@ def spread_between_highs_and_lows(ticker: Ticker):
 
 @add_requirement
 def avg_volume_greater_than_threshold(ticker: Ticker):
-    return ticker.volume.past_24_hrs > 150000
+    return ticker.volume.past_24_hrs * ticker.high.past_24_hrs > 150000
 
 
 @add_strategy
@@ -72,10 +72,11 @@ def hammer(candles: List[Candle]):
 
 @add_strategy
 def low_volume_but_high_price_movement(candles: List[Candle]):
-    avg_volume = mean(candle.volume for candle in candles)
+    num_intervals = 24 * 5
+    avg_volume = mean(candle.volume for candle in candles[-num_intervals:])
 
     cur_candle = candles[-1]
-    high_price_requirement = 0.02
+    high_price_requirement = 0.005
     result = (
         cur_candle.volume < 0.9 * avg_volume
         and abs(cur_candle.close / cur_candle.open - 1) >= high_price_requirement
@@ -86,16 +87,28 @@ def low_volume_but_high_price_movement(candles: List[Candle]):
 
 @add_strategy
 def increased_volume_with_bullish_price_movement(candles: List[Candle]):
-    avg_volume = mean(candle.volume for candle in candles)
+    num_intervals = 24 * 5
+    avg_volume = mean(candle.volume for candle in candles[-num_intervals:])
 
     cur_candle = candles[-1]
-    high_price_requirement = 0.02
+    high_price_requirement = 0.01
     result = (
-        cur_candle.volume >= 1.15 * avg_volume
+        cur_candle.volume >= 1.1 * avg_volume
         and cur_candle.close / cur_candle.open - 1 >= high_price_requirement
     )
 
     return result
+
+
+@add_strategy
+def gap(candles: List[Candle]):
+    prev_candle, cur_candle = candles[-2], candles[-1]
+
+    return (
+        cur_candle.open > prev_candle.close
+        and not prev_candle.is_red()
+        and not cur_candle.is_red()
+    )
 
 
 def create_watchlist(kraken_client: KrakenClient):
@@ -134,7 +147,7 @@ def perform_strategies(kraken_client: KrakenClient, discord_bot: DiscordBot, tic
 
             previous_successful_strategies[ticker] = successes
 
-        time.sleep(60)
+        time.sleep(300)
 
 
 if __name__ == "__main__":

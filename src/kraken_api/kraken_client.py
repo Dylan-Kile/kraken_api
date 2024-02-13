@@ -14,18 +14,14 @@ from kraken_api.configuration.kraken_config import KrakenConfiguration
 from datetime import datetime
 from kraken_api.model.interval import TradeInterval
 
-from kraken_api.paths.kraken_api_paths import (
-    ASSET_INFO_URI,
-    CANDLE_INFO_URI,
-    OPEN_ORDERS_PATH,
-    OPEN_ORDERS_URI,
-    TICKER_INFO_URI,
-    TRADES_HISTORY_PATH,
-    TRADES_HISTORY_URI,
-)
+from kraken_api.paths.kraken_api_paths import KrakenPaths
+
 from kraken_api.model.candle import Candle
 from kraken_api.model.ticker import Ticker
 from queue import PriorityQueue
+
+from kraken_api.model.api_action import ApiAction
+from kraken_api.paths.request_type import RequestType
 
 
 class KrakenClient:
@@ -62,18 +58,26 @@ class KrakenClient:
         else:
             return response_info["result"]
 
-    def api_call(time_increment=1):
-        def wrapped_api_call(api_func):
-            def new_call(self, *args, **kwargs):
-                self.api_counter += time_increment
+    def handle_error(error) -> ApiAction:
+        if "EGeneral:Internal error" in error:
+            return (ApiAction.Retry, error)
+        else:
+            return (ApiAction.Abort, error)
 
-                result = api_func(self, *args, **kwargs)
+    def api_call(api_func):
+        def new_call(
+            self,
+            path: KrakenPaths,
+            params={},
+            payload={},
+        ):
+            self.api_counter += path.cost_to_call
 
-                return result
+            result = api_func(self, path, params, payload)
 
-            return new_call
+            return result
 
-        return wrapped_api_call
+        return new_call
 
     def get_exclusions():
         with resources.files("local_files").joinpath(
@@ -99,7 +103,6 @@ class KrakenClient:
         return {
             "API-Sign": sigdigest.decode(),
             "API-Key": self.config.api_key,
-            "User-Agent": "Python API Client",
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
@@ -112,38 +115,43 @@ class KrakenClient:
 
         return payload
 
-    @api_call()
+    @api_call
+    def perform_request(self, path: KrakenPaths, params={}, payload={}):
+        headers = {
+            "User-Agent": "Python API Client",
+        }
+        if path.request_type == RequestType.Private:
+            headers = headers | self.get_authorization_headers(
+                path.path, payload | self.get_initial_private_payload()
+            )
+
+        if path.http_method == "GET":
+            return KrakenClient.get_data_or_raise(
+                requests.get(path.uri, params=params, headers=headers)
+            )
+        elif path.http_method == "POST":
+            return KrakenClient.get_data_or_raise(
+                requests.post(path.uri, params=params, data=payload, headers=headers)
+            )
+
     def get_open_trades(self):
-        init_payload = self.get_initial_private_payload()
-        headers = self.get_authorization_headers(OPEN_ORDERS_PATH, init_payload)
+        return self.perform_request(KrakenPaths.OPEN_ORDERS_PATH)
 
-        response = requests.post(OPEN_ORDERS_URI, data=init_payload, headers=headers)
-
-        return KrakenClient.get_data_or_raise(response)
-
-    @api_call()
     def get_trade_history(self):
-        init_payload = self.get_initial_private_payload()
-        headers = self.get_authorization_headers(TRADES_HISTORY_PATH, init_payload)
+        return self.perform_request(KrakenPaths.TRADES_HISTORY_PATH)
 
-        response = requests.post(TRADES_HISTORY_URI, data=init_payload, headers=headers)
-
-        return KrakenClient.get_data_or_raise(response)
-
-    @api_call()
     def get_tickers(self):
-        response = requests.get(ASSET_INFO_URI)
+        data = self.perform_request(KrakenPaths.TICKER_INFO_PATH)
 
         exclusions = KrakenClient.get_exclusions()
         return [
             ticker_pair
-            for ticker_pair in KrakenClient.get_data_or_raise(response).keys()
+            for ticker_pair in data.keys()
             if ticker_pair.endswith("USD") and ticker_pair not in exclusions
         ]
 
-    @api_call()
     def get_ticker_data(self):
-        response = requests.get(TICKER_INFO_URI)
+        data = self.perform_request(KrakenPaths.TICKER_INFO_PATH)
 
         exclusions = KrakenClient.get_exclusions()
         return [
@@ -159,11 +167,10 @@ class KrakenClient:
                 entry["h"],
                 entry["o"],
             )
-            for (ticker, entry) in KrakenClient.get_data_or_raise(response).items()
+            for (ticker, entry) in data.items()
             if ticker.endswith("USD") and ticker not in exclusions
         ]
 
-    @api_call(time_increment=2)
     def get_candle_data_for_ticker(
         self, ticker, days_back=14, interval=TradeInterval.ONE_HOUR
     ):
@@ -172,16 +179,14 @@ class KrakenClient:
         adjusted_cur_time = int((cur_time // interval_in_seconds) * interval_in_seconds)
 
         since = adjusted_cur_time - days_back * 86400
-        response = requests.get(
-            CANDLE_INFO_URI,
+        data = self.perform_request(
+            KrakenPaths.CANDLE_INFO_PATH,
             params={
                 "pair": ticker.replace("/", ""),
                 "interval": interval.value,
                 "since": since,
             },
         )
-        response_data = KrakenClient.get_data_or_raise(response)[
-            ticker.replace("/", "")
-        ]
+        response_data = data[ticker.replace("/", "")]
 
         return [Candle(*row) for row in response_data]
