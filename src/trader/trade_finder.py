@@ -1,10 +1,18 @@
 from statistics import mean
 import csv
 import time
-from typing import List
+from typing import List, Set
+from threading import Thread
 from kraken_api.kraken_client import KrakenClient
 from kraken_api.configuration.kraken_config import KrakenConfiguration
-from strategy.strategy import add_requirement, add_strategy, strategies, requirements
+from trader.strategy.strategy import (
+    add_delta_strategy,
+    add_requirement,
+    add_strategy,
+    strategies,
+    requirements,
+    delta_strategies,
+)
 from importlib import resources
 
 from kraken_api.kraken_client import KrakenClient
@@ -70,19 +78,19 @@ def hammer(candles: List[Candle]):
     )
 
 
-@add_strategy
-def low_volume_but_high_price_movement(candles: List[Candle]):
-    num_intervals = 24 * 5
-    avg_volume = mean(candle.volume for candle in candles[-num_intervals:])
+# @add_strategy
+# def low_volume_but_high_price_movement(candles: List[Candle]):
+#     num_intervals = 24 * 5
+#     avg_volume = mean(candle.volume for candle in candles[-num_intervals:])
 
-    cur_candle = candles[-1]
-    high_price_requirement = 0.005
-    result = (
-        cur_candle.volume < 0.9 * avg_volume
-        and abs(cur_candle.close / cur_candle.open - 1) >= high_price_requirement
-    )
+#     cur_candle = candles[-1]
+#     high_price_requirement = 0.005
+#     result = (
+#         cur_candle.volume < 0.9 * avg_volume
+#         and abs(cur_candle.close / cur_candle.open - 1) >= high_price_requirement
+#     )
 
-    return result
+#     return result
 
 
 @add_strategy
@@ -150,6 +158,65 @@ def perform_strategies(kraken_client: KrakenClient, discord_bot: DiscordBot, tic
         time.sleep(300)
 
 
+@add_delta_strategy
+def significant_rate_of_change_in_volume_with_bullish_trajectory(
+    prev: Ticker, cur: Ticker
+):
+    diff = cur.volume.today - prev.volume.today
+
+    is_successful = (
+        prev.volume.today != 0
+        and diff != 0
+        and diff / prev.volume.today > 0.05
+        and cur.last_trade_closed.price > cur.open_price
+    )
+    if not is_successful:
+        return (is_successful, None)
+    else:
+        return (
+            is_successful,
+            f"Percent change for volume of {diff / prev.volume.today}",
+        )
+
+
+def transform_ticker_data(ticker_data: List[Ticker], tickers_in_scope: Set[str]):
+    return {
+        ticker.ticker: ticker
+        for ticker in ticker_data
+        if ticker.ticker in tickers_in_scope
+    }
+
+
+def perform_delta_strategies(
+    kraken_client: KrakenClient, discord_bot: DiscordBot, tickers_in_scope: Set[str]
+):
+    interval = 30
+    previous_tickers = transform_ticker_data(
+        kraken_client.get_ticker_data(), tickers_in_scope
+    )
+    time.sleep(interval)
+    while True:
+        current_tickers = transform_ticker_data(
+            kraken_client.get_ticker_data(), tickers_in_scope
+        )
+
+        for ticker_name, cur_ticker in current_tickers.items():
+            prev_ticker = previous_tickers[ticker_name]
+            results = [
+                (delta_strategy.__name__, delta_strategy(prev_ticker, cur_ticker))
+                for delta_strategy in delta_strategies
+            ]
+            successes = [result for result in results if result[1][0]]
+            if len(successes) > 0:
+                discord_bot.send_basic_message(
+                    "delta-strategies",
+                    f"{cur_ticker.ticker} - {len(successes)} delta strategies in place - {[f'{result[0]}: {100*result[1][1]:.4f}%' for result in successes]}",
+                )
+
+        previous_tickers = current_tickers
+        time.sleep(interval)
+
+
 if __name__ == "__main__":
     kraken_client = KrakenClient(
         KrakenConfiguration.read_from_resource_file(
@@ -162,4 +229,13 @@ if __name__ == "__main__":
         watchlist = csv.DictReader(watchlist_file)
         tickers = [row["ticker"] for row in watchlist]
 
-    perform_strategies(kraken_client, discord_bot, tickers)
+    strategy_thread = Thread(
+        target=perform_strategies, args=[kraken_client, discord_bot, tickers]
+    )
+    strategy_thread.start()
+
+    delta_strategies_thread = Thread(
+        target=perform_delta_strategies, args=[kraken_client, discord_bot, tickers]
+    )
+    delta_strategies_thread.start()
+    # perform_strategies(kraken_client, discord_bot, tickers)
