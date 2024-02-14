@@ -1,6 +1,7 @@
 from statistics import mean
 import csv
 import time
+import logging
 from typing import List, Set
 from threading import Thread
 from kraken_api.kraken_client import KrakenClient
@@ -136,8 +137,8 @@ def create_watchlist(kraken_client: KrakenClient):
 def perform_strategies(kraken_client: KrakenClient, discord_bot: DiscordBot, tickers):
     previous_successful_strategies = {}
     while True:
+        logging.info("Evaluating strategies")
         for ticker in tickers:
-            print(f"Evaluating strategies for {ticker}")
             candle_data = kraken_client.get_candle_data_for_ticker(ticker)
             results = [
                 (strategy.__name__, strategy(candle_data)) for strategy in strategies
@@ -148,6 +149,7 @@ def perform_strategies(kraken_client: KrakenClient, discord_bot: DiscordBot, tic
                 len(successes) > 0
                 and previous_successful_strategies.get(ticker, []) != successes
             ):
+                logging.info(f"Found successful strategies for {ticker}")
                 discord_bot.send_basic_message(
                     "strategies",
                     f"{ticker} - {len(successes)} strategies in place - {[result[0] for result in successes]}",
@@ -168,14 +170,14 @@ def significant_rate_of_change_in_volume_with_bullish_trajectory(
         prev.volume.today != 0
         and diff != 0
         and diff / prev.volume.today > 0.05
-        and cur.last_trade_closed.price > cur.open_price
+        and cur.last_trade_closed.price > prev.last_trade_closed.price
     )
     if not is_successful:
         return (is_successful, None)
     else:
         return (
             is_successful,
-            f"Percent change for volume of {diff / prev.volume.today}",
+            f"Percent change for volume of {100*diff / prev.volume.today:.4f}%",
         )
 
 
@@ -196,6 +198,7 @@ def perform_delta_strategies(
     )
     time.sleep(interval)
     while True:
+        logging.info("Evaluating delta strategies")
         current_tickers = transform_ticker_data(
             kraken_client.get_ticker_data(), tickers_in_scope
         )
@@ -208,9 +211,12 @@ def perform_delta_strategies(
             ]
             successes = [result for result in results if result[1][0]]
             if len(successes) > 0:
+                logging.info(
+                    f"Found successful delta strategies for {cur_ticker.ticker}"
+                )
                 discord_bot.send_basic_message(
                     "delta-strategies",
-                    f"{cur_ticker.ticker} - {len(successes)} delta strategies in place - {[f'{result[0]}: {100*result[1][1]:.4f}%' for result in successes]}",
+                    f"{cur_ticker.ticker} - {len(successes)} delta strategies in place - {[f'{result[0]}: {result[1][1]}' for result in successes]}",
                 )
 
         previous_tickers = current_tickers
@@ -218,6 +224,7 @@ def perform_delta_strategies(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     kraken_client = KrakenClient(
         KrakenConfiguration.read_from_resource_file(
             "kraken_api.resources", "config.yaml"
