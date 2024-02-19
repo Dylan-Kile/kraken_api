@@ -20,6 +20,13 @@ class KrakenPaths(Enum):
     )
     OPEN_ORDERS_PATH = f"{PRIVATE_PATH}/OpenOrders", RequestType.Private, "POST", 1
 
+    OPEN_POSITIONS_PATH = (
+        f"{PRIVATE_PATH}/OpenPositions",
+        RequestType.Private,
+        "POST",
+        1,
+    )
+
     def __init__(self, path, request_type, http_method, cost_to_call):
         self.path = path
         self.uri = f"{BASE_HOST}{path}"

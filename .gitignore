@@ -3,3 +3,5 @@ discord-bot-token.txt
 config.yaml
 .vscode/
 /**/frontend/**
+transactions.csv
+test.py

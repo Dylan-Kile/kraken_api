@@ -15,6 +15,7 @@ from trader.strategy.strategy import (
     delta_strategies,
 )
 from importlib import resources
+from collections import defaultdict
 
 from kraken_api.kraken_client import KrakenClient
 from kraken_api.model.candle import Candle
@@ -33,7 +34,7 @@ def spread_between_highs_and_lows(ticker: Ticker):
 
 @add_requirement
 def avg_volume_greater_than_threshold(ticker: Ticker):
-    return ticker.volume.past_24_hrs * ticker.high.past_24_hrs > 150000
+    return ticker.volume.past_24_hrs * ticker.high.past_24_hrs > 250000
 
 
 @add_strategy
@@ -120,6 +121,25 @@ def gap(candles: List[Candle]):
     )
 
 
+@add_strategy
+def is_within_threshold_to_support(candles: List[Candle]):
+    stack = []
+    prev = candles[0]
+    for current_candle in candles[1:-1]:
+        if (prev.is_red() and not current_candle.is_red()) or (
+            not prev.is_red() and current_candle.is_red()
+        ):
+            close = min(prev.close, current_candle.close)
+            while len(stack) > 0 and stack[-1] > close:
+                stack.pop()
+            stack.append(close)
+        prev = current_candle
+
+    for close in stack:
+        if abs(candles[-1].close - close) < 0.1 * (candles[-1].high - candles[-1].low):
+            return True
+
+
 def create_watchlist(kraken_client: KrakenClient):
     tickers_to_watch = []
     print("Creating watchlist")
@@ -204,7 +224,11 @@ def perform_delta_strategies(
         )
 
         for ticker_name, cur_ticker in current_tickers.items():
-            prev_ticker = previous_tickers[ticker_name]
+            prev_ticker = previous_tickers.get(ticker_name, None)
+            if not prev_ticker:
+                logging.error(f"{ticker_name} has no previous ticker")
+                continue
+
             results = [
                 (delta_strategy.__name__, delta_strategy(prev_ticker, cur_ticker))
                 for delta_strategy in delta_strategies

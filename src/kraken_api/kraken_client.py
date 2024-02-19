@@ -2,6 +2,7 @@ import base64
 import csv
 import hashlib
 import hmac
+from typing import List
 import pyotp
 import time
 import requests
@@ -13,6 +14,7 @@ import urllib
 from kraken_api.configuration.kraken_config import KrakenConfiguration
 from datetime import datetime
 from kraken_api.model.interval import TradeInterval
+from kraken_api.model.trade_history_record import TradeHistoryRecord
 
 from kraken_api.paths.kraken_api_paths import KrakenPaths
 
@@ -86,7 +88,7 @@ class KrakenClient:
             return set(row["ticker"] for row in csv.DictReader(exclusions_file))
 
     def get_authorization_headers(self, uri_path, payload):
-        if not self.config.api_key or not self.config.secret_api_key:
+        if not self.config.api_private_key or not self.config.api_key:
             raise Exception(
                 "To perform private calls, please provide your API Key as well as your Secret key"
             )
@@ -94,9 +96,8 @@ class KrakenClient:
         postdata = urllib.parse.urlencode(payload)
         encoded = (str(payload["nonce"]) + postdata).encode()
         message = uri_path.encode() + hashlib.sha256(encoded).digest()
-
         mac = hmac.new(
-            base64.b64decode(self.config.secret_api_key), message, hashlib.sha512
+            base64.b64decode(self.config.api_private_key), message, hashlib.sha512
         )
         sigdigest = base64.b64encode(mac.digest())
 
@@ -121,9 +122,8 @@ class KrakenClient:
             "User-Agent": "Python API Client",
         }
         if path.request_type == RequestType.Private:
-            headers = headers | self.get_authorization_headers(
-                path.path, payload | self.get_initial_private_payload()
-            )
+            payload = payload | self.get_initial_private_payload()
+            headers = headers | self.get_authorization_headers(path.path, payload)
 
         if path.http_method == "GET":
             return KrakenClient.get_data_or_raise(
@@ -137,8 +137,41 @@ class KrakenClient:
     def get_open_trades(self):
         return self.perform_request(KrakenPaths.OPEN_ORDERS_PATH)
 
-    def get_trade_history(self):
-        return self.perform_request(KrakenPaths.TRADES_HISTORY_PATH)
+    def get_trade_history(
+        self, start=0.0, end=time.time(), offset=0
+    ) -> List[TradeHistoryRecord]:
+        payload = {
+            "start": start,
+            "end": end,
+            "ofs": offset,
+            "consolidate_taker": False,
+        }
+        data = self.perform_request(KrakenPaths.TRADES_HISTORY_PATH, payload=payload)
+
+        trades = data["trades"].values()
+        for trade in trades:
+            if trade["pair"] == "XXMRZUSD":
+                print(",".join(str(v) for v in trade.values()))
+        return [
+            TradeHistoryRecord(
+                trade["time"],
+                trade["pair"],
+                trade["type"],
+                float(trade["price"]),
+                (
+                    float(trade["vol"])
+                    * (
+                        1
+                        if trade["type"] == "sell"
+                        else 1 - float(trade["fee"]) / float(trade["cost"])
+                    )
+                ),
+            )
+            for trade in trades
+        ]
+
+    def get_open_positions(self):
+        return self.perform_request(KrakenPaths.OPEN_POSITIONS_PATH)
 
     def get_tickers(self):
         data = self.perform_request(KrakenPaths.TICKER_INFO_PATH)
