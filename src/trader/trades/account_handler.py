@@ -7,7 +7,7 @@ from kraken_api.kraken_client import KrakenClient
 from kraken_api.model.trade_history_record import TradeHistoryRecord
 from trader.model.position import Position
 
-HEADERS = ["timestamp", "ticker", "type", "price", "quantity"]
+HEADERS = ["timestamp", "ticker", "type", "cost", "fee", "price", "quantity"]
 
 
 def get_open_transactions_from_disk() -> List[TradeHistoryRecord]:
@@ -20,6 +20,8 @@ def get_open_transactions_from_disk() -> List[TradeHistoryRecord]:
             float(row["timestamp"]),
             row["ticker"],
             row["type"],
+            float(row["cost"]),
+            float(row["fee"]),
             float(row["price"]),
             float(row["quantity"]),
         )
@@ -46,13 +48,15 @@ def update_disk_transactions(client: KrakenClient):
                 )
             )
             != 0
-            and min(record.timestamp for record in trade_records) > last_recorded_time
+            and max(record.timestamp for record in trade_records) > last_recorded_time
         ):
             writer.writerows(
                 [
                     {
                         "timestamp": record.timestamp,
                         "ticker": record.ticker,
+                        "cost": record.cost,
+                        "fee": record.fee,
                         "type": record.type,
                         "price": record.price,
                         "quantity": record.quantity,

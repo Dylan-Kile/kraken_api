@@ -10,6 +10,7 @@ from trader.strategy.strategy import (
     add_delta_strategy,
     add_requirement,
     add_strategy,
+    depends_on,
     strategies,
     requirements,
     delta_strategies,
@@ -34,7 +35,7 @@ def spread_between_highs_and_lows(ticker: Ticker):
 
 @add_requirement
 def avg_volume_greater_than_threshold(ticker: Ticker):
-    return ticker.volume.past_24_hrs * ticker.high.past_24_hrs > 250000
+    return ticker.volume.past_24_hrs * ticker.high.past_24_hrs > 2000000
 
 
 @add_strategy
@@ -80,6 +81,13 @@ def hammer(candles: List[Candle]):
     )
 
 
+def higher_than_avg_volume(candles: List[Candle]):
+    num_intervals = 24 * 5
+    avg_volume = mean(candle.volume for candle in candles[-num_intervals:-1])
+
+    return candles[-1].volume > avg_volume * 1.05
+
+
 # @add_strategy
 # def low_volume_but_high_price_movement(candles: List[Candle]):
 #     num_intervals = 24 * 5
@@ -111,6 +119,7 @@ def increased_volume_with_bullish_price_movement(candles: List[Candle]):
 
 
 @add_strategy
+@depends_on(higher_than_avg_volume)
 def gap(candles: List[Candle]):
     prev_candle, cur_candle = candles[-2], candles[-1]
 
@@ -161,7 +170,7 @@ def perform_strategies(kraken_client: KrakenClient, discord_bot: DiscordBot, tic
         for ticker in tickers:
             candle_data = kraken_client.get_candle_data_for_ticker(ticker)
             results = [
-                (strategy.__name__, strategy(candle_data)) for strategy in strategies
+                (strategy, strategy.execute(candle_data)) for strategy in strategies
             ]
             successes = [result for result in results if result[1]]
 

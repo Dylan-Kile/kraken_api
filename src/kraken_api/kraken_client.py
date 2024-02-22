@@ -157,15 +157,10 @@ class KrakenClient:
                 trade["time"],
                 trade["pair"],
                 trade["type"],
+                float(trade["cost"]),
+                float(trade["fee"]),
                 float(trade["price"]),
-                (
-                    float(trade["vol"])
-                    * (
-                        1
-                        if trade["type"] == "sell"
-                        else 1 - float(trade["fee"]) / float(trade["cost"])
-                    )
-                ),
+                float(trade["vol"]),
             )
             for trade in trades
         ]
